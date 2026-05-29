@@ -3071,7 +3071,7 @@ function Term({ code, children }) {
         <span style={{
           position: "absolute", bottom: "calc(100% + 8px)", left: 0,
           width: 280, padding: "12px 14px",
-          background: C.text, color: C.surface,
+          background: "#1C1917", color: "#F5F5F4",
           borderRadius: R.md, boxShadow: SHADOW.menu,
           fontSize: 12, lineHeight: 1.5, fontWeight: 400,
           letterSpacing: 0, textAlign: "left",
@@ -3088,7 +3088,7 @@ function Term({ code, children }) {
             width: 0, height: 0,
             borderLeft: "6px solid transparent",
             borderRight: "6px solid transparent",
-            borderTop: `6px solid ${C.text}`,
+            borderTop: "6px solid #1C1917",
           }} />
         </span>
       )}
