@@ -121,14 +121,14 @@ const BUILDINGS = [
   "Parker Elementary", "Central Middle", "Jefferson Elementary",
 ];
 
-// MA geography — x/y are normalized 0–1 within MA path viewBox (1000x460)
+// MA geography — real city coordinates (lon/lat), projected onto the MA outline in GeoHeatMap
 const BUILDING_GEO = {
-  "Westfield High":       { city: "Westfield",   x: 0.10, y: 0.63 },
-  "Lincoln Elementary":   { city: "Springfield", x: 0.14, y: 0.60 },
-  "Roosevelt Middle":     { city: "Worcester",   x: 0.42, y: 0.50 },
-  "Central Middle":       { city: "Lowell",      x: 0.65, y: 0.32 },
-  "Parker Elementary":    { city: "Cambridge",   x: 0.74, y: 0.46 },
-  "Jefferson Elementary": { city: "Boston",      x: 0.78, y: 0.50 },
+  "Westfield High":       { city: "Westfield",   lon: -72.749, lat: 42.125 },
+  "Lincoln Elementary":   { city: "Springfield", lon: -72.589, lat: 42.101 },
+  "Roosevelt Middle":     { city: "Worcester",   lon: -71.802, lat: 42.263 },
+  "Central Middle":       { city: "Lowell",      lon: -71.315, lat: 42.633 },
+  "Parker Elementary":    { city: "Cambridge",   lon: -71.106, lat: 42.375 },
+  "Jefferson Elementary": { city: "Boston",      lon: -71.058, lat: 42.360 },
 };
 
 // ============================================================
@@ -2889,60 +2889,56 @@ function GeoHeatMap({ incidents }) {
 
   const maxCount = Math.max(...byBuilding.map(b => b.count), 1);
 
-  // Massachusetts outline — viewBox 1000x460
-  // Roughly traces: NW corner (Williamstown) → NH border running E → Cape Ann notch →
-  // Boston Harbor / South Shore → Plymouth → Cape Cod neck (Bourne) → Cape Cod arm east →
-  // Provincetown tip → hook back west → Buzzards Bay cut → CT/RI border → close
-  const maPath = `
-    M 50 150
-    L 65 130
-    Q 90 118 140 116
-    L 690 100
-    Q 740 100 770 104
-    L 798 100
-    Q 815 102 818 118
-    L 815 132
-    Q 810 142 800 145
-    L 805 162
-    Q 815 185 818 215
-    Q 820 245 810 270
-    Q 800 290 785 300
-    L 775 318
-    L 762 326
-    Q 762 332 776 330
-    Q 815 326 858 322
-    Q 905 318 935 312
-    Q 956 308 968 296
-    L 974 286
-    Q 968 278 952 280
-    Q 920 286 880 294
-    Q 836 304 800 308
-    Q 768 312 744 320
-    Q 720 326 690 326
-    L 250 322
-    Q 150 320 95 314
-    L 60 304
-    Q 48 290 50 270
-    L 50 150
-    Z
-  `;
+  // Massachusetts outline — projected from real geographic coordinates.
+  // Equirectangular projection (longitude scaled by cos(lat) so the shape
+  // keeps its true proportions). viewBox is 1000 × 630.
+  const VBW = 1000, VBH = 630;
+  const COS_LAT = 0.7431;   // cos(42°)
+  const LON_W = -73.6;      // left edge (deg lon, with padding)
+  const LAT_N = 42.95;      // top edge (deg lat, with padding)
+  const SCALE = 358.9;      // px per distance-unit → fits MA width into VBW
+  const project = (lon, lat) => [
+    +((lon - LON_W) * COS_LAT * SCALE).toFixed(1),
+    +((LAT_N - lat) * SCALE).toFixed(1),
+  ];
 
-  // Martha's Vineyard + Nantucket (small islands south of Cape)
-  const islandsPath = `
-    M 800 365
-    Q 825 358 850 365
-    Q 858 375 838 380
-    Q 815 380 800 372 Z
-    M 895 385
-    Q 915 380 928 388
-    Q 932 396 915 398
-    Q 898 396 895 385 Z
-  `;
+  // Mainland + Cape Cod, traced clockwise from the NW corner.
+  // [lon, lat] pairs hitting MA's defining features:
+  // NW corner → north (VT/NH) border → Salisbury → Cape Ann → Boston Harbor →
+  // South Shore → Cape Cod Bay → Provincetown hook → outer Cape/Monomoy →
+  // Buzzards Bay → Fall River → RI/CT south border → SW corner.
+  const mainland = [
+    [-73.49, 42.74], [-72.81, 42.74], [-72.46, 42.73], [-71.93, 42.71],
+    [-71.50, 42.72], [-71.25, 42.74], [-71.05, 42.87], [-70.95, 42.81],
+    [-70.81, 42.66], [-70.62, 42.66], [-70.66, 42.58], [-70.90, 42.49],
+    [-70.92, 42.42], [-70.95, 42.34], [-70.72, 42.04], [-70.66, 41.96],
+    [-70.54, 41.78], [-70.50, 41.73], [-70.30, 41.77], [-70.07, 41.80],
+    [-70.04, 41.96], [-70.01, 42.05], [-70.18, 42.08], [-70.24, 42.02],
+    [-70.07, 41.95], [-69.96, 41.68], [-70.00, 41.55], [-70.30, 41.62],
+    [-70.50, 41.55], [-70.65, 41.60], [-70.62, 41.74], [-70.75, 41.70],
+    [-70.92, 41.63], [-71.05, 41.68], [-71.20, 41.75], [-71.38, 41.78],
+    [-71.38, 42.01], [-71.80, 42.02], [-72.50, 42.03], [-73.05, 42.05],
+    [-73.49, 42.05],
+  ];
+  const marthasVineyard = [
+    [-70.76, 41.41], [-70.50, 41.44], [-70.46, 41.35], [-70.62, 41.33], [-70.76, 41.36],
+  ];
+  const nantucket = [
+    [-70.20, 41.30], [-70.00, 41.31], [-69.96, 41.25], [-70.15, 41.25],
+  ];
+  const toPath = (pts) =>
+    pts.map((p, i) => {
+      const [x, y] = project(p[0], p[1]);
+      return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+    }).join(" ") + " Z";
+
+  const maPath = toPath(mainland);
+  const islandsPath = `${toPath(marthasVineyard)} ${toPath(nantucket)}`;
 
   return (
     <div style={{ position: "relative", width: "100%" }}>
-      <svg viewBox="0 0 1000 460" preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", maxHeight: 460, display: "block" }}>
+      <svg viewBox={`0 0 ${VBW} ${VBH}`} preserveAspectRatio="xMidYMid meet"
+        style={{ width: "100%", maxHeight: 520, display: "block" }}>
         {/* MA mainland + Cape Cod outline */}
         <path d={maPath}
           fill={C.surfaceAlt}
@@ -2956,14 +2952,13 @@ function GeoHeatMap({ incidents }) {
           strokeWidth={1.5}
           strokeLinejoin="round" />
         {/* Subtle compass / scale indicator */}
-        <text x={64} y={440} fontSize="10" fill={C.textMuted}
+        <text x={20} y={VBH - 14} fontSize="11" fill={C.textMuted}
           fontFamily={FONTS.body} letterSpacing="0.1em">
           MASSACHUSETTS · {byBuilding.reduce((s, b) => s + b.count, 0)} INCIDENTS · 30 DAYS
         </text>
         {/* Heat halos (under markers) */}
         {byBuilding.map(b => {
-          const cx = b.x * 1000;
-          const cy = b.y * 460;
+          const [cx, cy] = project(b.lon, b.lat);
           const intensity = b.count / maxCount;
           const radius = 30 + intensity * 50;
           const color = SEVERITY[b.maxSev].color;
@@ -2981,8 +2976,7 @@ function GeoHeatMap({ incidents }) {
 
         {/* Markers */}
         {byBuilding.map(b => {
-          const cx = b.x * 1000;
-          const cy = b.y * 460;
+          const [cx, cy] = project(b.lon, b.lat);
           const isHover = hovered && hovered.building === b.building;
           const color = SEVERITY[b.maxSev].color;
           const markerSize = 7 + (b.count / maxCount) * 8;
