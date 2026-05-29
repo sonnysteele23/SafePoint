@@ -1861,8 +1861,8 @@ function ReportForm({ user, onCancel, onSubmit }) {
           {/* 911 Emergency */}
           <label style={{
             display: "flex", alignItems: "flex-start", gap: 12, padding: 14,
-            background: is911 ? "#FEF2F2" : C.bg,
-            border: `1px solid ${is911 ? "#FCA5A5" : C.border}`,
+            background: is911 ? C.criticalBg : C.bg,
+            border: `1px solid ${is911 ? C.critical : C.border}`,
             borderRadius: R.md, cursor: "pointer", transition: "all 0.12s",
           }}>
             <input type="checkbox" checked={is911} onChange={e => setIs911(e.target.checked)} style={{ marginTop: 3 }} />
@@ -2282,7 +2282,7 @@ function IncidentDetail({ user, incident, onBack, onReply, onStatus, onAssignPol
         )}
         {incident.is911 && (
           <div style={{
-            marginTop: 16, padding: "12px 14px", background: "#FEF2F2", border: `1px solid #FCA5A5`,
+            marginTop: 16, padding: "12px 14px", background: C.criticalBg, border: `1px solid ${C.critical}`,
             borderRadius: R.md, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: C.critical, fontWeight: 600,
           }}>
             <Siren size={16} /> 911 was called. Emergency response was requested at the scene.
