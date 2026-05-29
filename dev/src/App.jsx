@@ -6,9 +6,10 @@ import {
   Megaphone, ArrowRight, LogOut, ChevronDown, Bell, Tag,
   Mail, Lock, Sparkles, ShieldCheck, Siren,
   FileWarning, Calendar, Briefcase, Gavel, UserCheck, Activity,
-  Sun, Moon
+  Sun, Moon, Printer, FileText, ShieldOff
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from "recharts";
+import { jsPDF } from "jspdf";
 
 // ============================================================
 // DESIGN TOKENS — light and dark theme variants
@@ -633,6 +634,7 @@ function computeRepActions(incidents) {
       title: `Check in with ${names}`,
       body: `Filed ${heavyReporters[0][1]}+ reports in 30 days. They need to know the union sees them.`,
       cta: "Schedule check-in",
+      data: { names, count: heavyReporters[0][1] },
     });
   }
 
@@ -646,6 +648,7 @@ function computeRepActions(incidents) {
       title: `${hotLoc[0]} — ${hotLoc[1]} incidents in 30 days`,
       body: "Same location keeps coming up. Walk through with admin and document staffing, sightlines, exits.",
       cta: "Open location report",
+      data: { location: hotLoc[0], count: hotLoc[1] },
     });
   }
 
@@ -657,6 +660,7 @@ function computeRepActions(incidents) {
       title: `${compNeeded.length} report${compNeeded.length === 1 ? "" : "s"} flagged worker's comp`,
       body: "Confirm the member has filed the district form. Many never do because no one tells them to.",
       cta: "Send checklist",
+      data: { count: compNeeded.length },
     });
   }
 
@@ -679,6 +683,7 @@ function computePresidentActions(incidents) {
       title: `${hot[0]} approaching OSHA-reportable threshold`,
       body: `${hot[1]} incidents in 30 days. Document the pattern, file Form 300 entries, prepare General Duty Clause complaint if district doesn't act.`,
       cta: "Start OSHA packet",
+      data: { building: hot[0], count: hot[1] },
     });
   }
 
@@ -691,6 +696,7 @@ function computePresidentActions(incidents) {
       title: `${pct}% of incidents involve Special Ed IAs`,
       body: `${iaIncidents.length} reports from your lowest-paid, most-exposed members. This is bargaining priority #1 — staffing ratios, PPE, hazard pay.`,
       cta: "Build bargaining brief",
+      data: { pct, count: iaIncidents.length },
     });
   }
 
@@ -702,6 +708,7 @@ function computePresidentActions(incidents) {
       title: `Mold reported at ${mold[0].building}`,
       body: "Facilities hazards have a clean OSHA path even in non-state-plan states. File complaint if district hasn't remediated within 30 days.",
       cta: "File OSHA complaint",
+      data: { building: mold[0].building, hazard: "Mold / indoor air quality" },
     });
   }
 
@@ -735,6 +742,7 @@ function computePresidentActions(incidents) {
       title: `${parentThreats.length} verbal threats from parents`,
       body: "Push admin to enforce trespass and verbal-abuse policies. Members shouldn't absorb this as 'part of the job.'",
       cta: "Draft policy memo",
+      data: { count: parentThreats.length },
     });
   }
 
@@ -781,6 +789,7 @@ export default function App() {
   const [view, setView] = useState("home");
   const [selectedId, setSelectedId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [filedDocs, setFiledDocs] = useState([]);
   const [themeMode, setThemeMode] = useState("light");
   const vp = useViewport();
 
@@ -913,6 +922,27 @@ export default function App() {
     setView("home");
   }
 
+  function fileDocument(meta) {
+    const routedTo = ["building rep", "local president"];
+    setFiledDocs(prev => [{ id: `DOC-${Math.random().toString(36).slice(2, 7).toUpperCase()}`, t: Date.now(), filedBy: user.name, routedTo, ...meta }, ...prev]);
+
+    // Mock routing: notify building rep + local president, like reports do
+    const repAccount = Object.values(ACCOUNTS).find(a => a.role === "rep" && a.building === user.building);
+    const presAccount = Object.values(ACCOUNTS).find(a => a.role === "president");
+    [repAccount, presAccount].forEach((acct, idx) => {
+      if (acct && (idx === 0 || acct.id !== (repAccount && repAccount.id))) {
+        pushNotif({
+          forUserId: acct.id, importance: "info", type: "document",
+          title: `Document filed: ${meta.title}`,
+          body: `${user.name} filed and routed this document.`,
+        });
+      }
+    });
+
+    setToast({ title: "Document filed", body: `“${meta.title}” downloaded and routed to your building rep and local president.` });
+    setTimeout(() => setToast(null), 6000);
+  }
+
   function postReply(incidentId, text) {
     const roleName = user.role === "rep" ? "Building rep" : user.role === "president" ? "Local president" : "Member";
     let target = null;
@@ -1022,10 +1052,12 @@ export default function App() {
         {user.role === "rep" && view === "home" && (
           <RepDashboard user={user}
             incidents={incidents.filter(i => i.building === user.building)}
+            onFileDoc={fileDocument} filedDocs={filedDocs}
             onOpen={(id) => { setSelectedId(id); setView("detail"); }} />
         )}
         {user.role === "president" && view === "home" && (
           <PresidentDashboard user={user} incidents={incidents}
+            onFileDoc={fileDocument} filedDocs={filedDocs}
             onOpen={(id) => { setSelectedId(id); setView("detail"); }} />
         )}
         {view === "detail" && selected && (
@@ -1929,7 +1961,7 @@ function ReportForm({ user, onCancel, onSubmit }) {
 // ============================================================
 // REP DASHBOARD
 // ============================================================
-function RepDashboard({ user, incidents, onOpen }) {
+function RepDashboard({ user, incidents, onOpen, onFileDoc, filedDocs }) {
   const day = 86400_000;
   const now = Date.now();
   const open = incidents.filter(i => i.status !== "resolved");
@@ -1964,10 +1996,11 @@ function RepDashboard({ user, incidents, onOpen }) {
         <>
           <SectionLabel>Action items for you</SectionLabel>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 14, marginBottom: 36 }}>
-            {actions.map((a, i) => <ActionItemCard key={i} action={a} />)}
+            {actions.map((a, i) => <ActionItemCard key={i} action={a} onFile={onFileDoc} />)}
           </div>
         </>
       )}
+      <FiledDocsList docs={filedDocs} />
 
       <SectionLabel>Severity, last 30 days</SectionLabel>
       <div style={{
@@ -2051,7 +2084,7 @@ function RepDashboard({ user, incidents, onOpen }) {
 // ============================================================
 // PRESIDENT DASHBOARD
 // ============================================================
-function PresidentDashboard({ user, incidents, onOpen }) {
+function PresidentDashboard({ user, incidents, onOpen, onFileDoc, filedDocs }) {
   const day = 86400_000;
   const now = Date.now();
   const thisWeek = incidents.filter(i => i.t > now - 7 * day);
@@ -2101,10 +2134,11 @@ function PresidentDashboard({ user, incidents, onOpen }) {
         <>
           <SectionLabel>Action items — what needs you this week</SectionLabel>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 14, marginBottom: 36 }}>
-            {actions.map((a, i) => <ActionItemCard key={i} action={a} />)}
+            {actions.map((a, i) => <ActionItemCard key={i} action={a} onFile={onFileDoc} />)}
           </div>
         </>
       )}
+      <FiledDocsList docs={filedDocs} />
 
       <SectionLabel>Severity, last 30 days</SectionLabel>
       <div style={{
@@ -2120,7 +2154,8 @@ function PresidentDashboard({ user, incidents, onOpen }) {
             <LineChart data={weeks} margin={{ top: 8, right: 8, left: -22, bottom: 0 }}>
               <XAxis dataKey="week" tick={{ fill: C.textMuted, fontSize: 11 }} axisLine={{ stroke: C.border }} tickLine={false} />
               <YAxis tick={{ fill: C.textMuted, fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 13, boxShadow: SHADOW.menu }}
+              <Tooltip contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 13, boxShadow: SHADOW.menu, color: C.text }}
+                itemStyle={{ color: C.text }}
                 labelStyle={{ color: C.textMuted, fontSize: 11 }} />
               <Line type="monotone" dataKey="count" stroke={C.accent} strokeWidth={2} dot={{ fill: C.accent, r: 3, strokeWidth: 0 }} activeDot={{ r: 5 }} />
             </LineChart>
@@ -2524,10 +2559,284 @@ function Stat({ label, value, accent, change }) {
 // ============================================================
 // DASHBOARD ANALYTICS COMPONENTS
 // ============================================================
-function ActionItemCard({ action }) {
+// ============================================================
+// DOCUMENT GENERATOR — turns an action item into an editable,
+// pre-filled draft that can be downloaded / printed / filed as a PDF.
+// All data is aggregate + de-identified: no student or medical PII.
+// ============================================================
+function buildDocTemplate(action) {
+  const d = action.data || {};
+  switch (action.kind) {
+    case "osha":
+      return {
+        kind: action.kind,
+        title: "OSHA Form 300 / 301 — Work-Related Injury Packet",
+        filename: "OSHA-300-packet",
+        fields: [
+          { key: "establishment", label: "Establishment (school)", value: d.building || "" },
+          { key: "preparedBy", label: "Prepared by", value: "Westfield Education Association (local)" },
+          { key: "period", label: "Reporting period", value: "Last 30 days" },
+          { key: "cases", label: "Recordable cases", value: String(d.count ?? "") },
+          { key: "summary", label: "Injury & illness summary", multiline: true,
+            value: `${d.count ?? "Multiple"} work-related injury incidents recorded at ${d.building || "this site"} in the last 30 days. Injuries occurred during student behavioral episodes (bites, strikes, scratches). All cases involve staff. No student-identifying information is included in this filing.` },
+          { key: "classes", label: "Affected job classifications", multiline: true,
+            value: "Instructional Assistants (Special Education); Teachers." },
+          { key: "nature", label: "Nature of injuries", multiline: true,
+            value: "Bites, contusions, abrasions; skin broken in several cases. Some required nurse evaluation and worker's compensation filing." },
+          { key: "abatement", label: "General Duty Clause note", multiline: true,
+            value: "This pattern indicates a recognized hazard under OSHA §5(a)(1). If the district does not implement feasible abatement — adequate staffing ratios, de-escalation training currency, and PPE — a General Duty Clause complaint will follow." },
+        ],
+      };
+    case "bargaining":
+      return {
+        kind: action.kind,
+        title: "Bargaining Brief — Staff Safety & Special Education Staffing",
+        filename: "bargaining-brief",
+        fields: [
+          { key: "preparedFor", label: "Prepared for", value: "Bargaining Committee" },
+          { key: "headline", label: "Headline finding",
+            value: `${d.pct ?? ""}% of incidents involve Special Education Instructional Assistants` },
+          { key: "data", label: "Data summary", multiline: true,
+            value: `${d.count ?? "Multiple"} reports in the last 30 days originate from Special Education IAs — among the lowest-paid, most-exposed members. Figures are aggregate and de-identified.` },
+          { key: "demands", label: "Proposed contract demands", multiline: true,
+            value: "1. Minimum 1:1 staffing ratios where a behavioral support plan is documented.\n2. Hazard differential pay for high-exposure assignments.\n3. Employer-provided personal protective equipment.\n4. Guaranteed, paid CPI / MANDT de-escalation training currency." },
+          { key: "rationale", label: "Rationale", multiline: true,
+            value: "Members are absorbing injury and trauma that the current contract does not address. Safety is a mandatory subject of bargaining." },
+        ],
+      };
+    case "facilities":
+      return {
+        kind: action.kind,
+        title: "OSHA Complaint — General Duty Clause §5(a)(1)",
+        filename: "OSHA-complaint",
+        fields: [
+          { key: "to", label: "To", value: "OSHA Area Office" },
+          { key: "establishment", label: "Establishment", value: d.building || "" },
+          { key: "complainant", label: "Complainant", value: "Westfield Education Association (local)" },
+          { key: "hazard", label: "Hazard described", multiline: true,
+            value: `Reported environmental hazard (${(d.hazard || "facilities hazard").toLowerCase()}) at ${d.building || "this site"} affecting staff. Staff have reported related symptoms (e.g., headaches). The district has not remediated within 30 days of the initial report.` },
+          { key: "requested", label: "Requested action", multiline: true,
+            value: "Inspection of the affected area and an order requiring the district to remediate the hazard and document the abatement." },
+        ],
+      };
+    case "policy":
+      return {
+        kind: action.kind,
+        title: "Policy Memo — Enforce Trespass & Verbal-Abuse Policies",
+        filename: "policy-memo",
+        fields: [
+          { key: "to", label: "To", value: "District Administration" },
+          { key: "from", label: "From", value: "Local President, Westfield Education Association" },
+          { key: "subject", label: "Subject",
+            value: `Parent verbal threats — ${d.count ?? "multiple"} reports in 30 days` },
+          { key: "body", label: "Memo body", multiline: true,
+            value: `Staff have filed ${d.count ?? "multiple"} reports of verbal threats or abuse from parents in the last 30 days. We request that the district consistently enforce its trespass and verbal-abuse policies, communicate consequences to families, and confirm that staff are not expected to absorb this as "part of the job." We ask for a written response within 10 business days.` },
+        ],
+      };
+    case "check_in":
+      return {
+        kind: action.kind,
+        title: "Member Check-In — Wellness & Follow-Up",
+        filename: "member-check-in",
+        fields: [
+          { key: "staff", label: "Staff to check in with", value: d.names || "" },
+          { key: "reason", label: "Why", value: `Each filed ${d.count ?? "3+"}+ incident reports in the last 30 days.` },
+          { key: "points", label: "Talking points", multiline: true,
+            value: "• Acknowledge what they've experienced and thank them for reporting.\n• Ask what support they need to feel safe at work.\n• Confirm worker's comp and EAP (counseling) options are available.\n• Document any safety concerns or staffing requests they raise." },
+          { key: "followUp", label: "Follow-up date", value: "" },
+          { key: "notes", label: "Notes from conversation", multiline: true, value: "" },
+        ],
+      };
+    case "pattern":
+      return {
+        kind: action.kind,
+        title: `Location Safety Walkthrough — ${d.location || "Location"}`,
+        filename: "location-walkthrough",
+        fields: [
+          { key: "location", label: "Location", value: d.location || "" },
+          { key: "count", label: "Incidents (last 30 days)", value: String(d.count ?? "") },
+          { key: "observations", label: "Walkthrough observations", multiline: true,
+            value: "Staffing levels at time of incidents:\nSightlines / blind spots:\nExits and egress:\nEnvironmental factors (noise, crowding, transitions):" },
+          { key: "requested", label: "Requested changes", multiline: true,
+            value: "Recommended changes to staffing, layout, or procedures to reduce risk at this location." },
+          { key: "admin", label: "Admin present for walkthrough", value: "" },
+        ],
+      };
+    case "paperwork":
+      return {
+        kind: action.kind,
+        title: "Worker's Compensation Filing Checklist",
+        filename: "workers-comp-checklist",
+        fields: [
+          { key: "reports", label: "Reports flagged for comp", value: String(d.count ?? "") },
+          { key: "checklist", label: "Checklist", multiline: true,
+            value: "[ ] District incident / injury form completed\n[ ] Seen by school nurse or physician\n[ ] Worker's comp claim (state form) filed with district\n[ ] Supervisor notified in writing\n[ ] Copy retained by member and by the union\n[ ] Follow-up medical appointment scheduled" },
+          { key: "deadline", label: "Filing deadline", value: "" },
+          { key: "notes", label: "Notes", multiline: true, value: "" },
+        ],
+      };
+    default:
+      return {
+        kind: action.kind,
+        title: action.title || "SafePoint Document",
+        filename: "safepoint-document",
+        fields: [
+          { key: "summary", label: "Summary", multiline: true, value: action.body || "" },
+          { key: "notes", label: "Notes / next steps", multiline: true, value: "" },
+        ],
+      };
+  }
+}
+
+function generateDocPdf(template, values) {
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const margin = 56;
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const maxW = pageW - margin * 2;
+  let y = margin;
+  const stamp = new Date().toLocaleString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(20);
+  doc.splitTextToSize(template.title, maxW).forEach(l => { doc.text(l, margin, y); y += 20; });
+  y += 2;
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(130);
+  doc.text("SafePoint · De-identified — contains no student or medical PII", margin, y); y += 12;
+  doc.text(`Generated ${stamp}`, margin, y); y += 16;
+  doc.setDrawColor(210); doc.line(margin, y, pageW - margin, y); y += 22;
+
+  template.fields.forEach(f => {
+    const val = (values[f.key] ?? "").toString().trim() || "—";
+    if (y > pageH - margin - 40) { doc.addPage(); y = margin; }
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(110);
+    doc.text(f.label.toUpperCase(), margin, y); y += 14;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(25);
+    doc.splitTextToSize(val, maxW).forEach(line => {
+      if (y > pageH - margin) { doc.addPage(); y = margin; }
+      doc.text(line, margin, y); y += 15;
+    });
+    y += 12;
+  });
+  return doc;
+}
+
+function docFilename(template) {
+  return `${template.filename}-${new Date().toISOString().slice(0, 10)}.pdf`;
+}
+
+function DocumentGenerator({ template, onClose, onFile }) {
+  const [values, setValues] = useState(() =>
+    Object.fromEntries(template.fields.map(f => [f.key, f.value]))
+  );
+  const set = (k, v) => setValues(prev => ({ ...prev, [k]: v }));
+  const fieldStyle = {
+    width: "100%", boxSizing: "border-box", padding: "9px 11px",
+    border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 13,
+    fontFamily: FONTS.body, background: C.bg, color: C.text, outline: "none",
+  };
+
+  function download() { generateDocPdf(template, values).save(docFilename(template)); }
+  function print() {
+    const doc = generateDocPdf(template, values);
+    doc.autoPrint();
+    window.open(doc.output("bloburl"), "_blank");
+  }
+  function submit() {
+    generateDocPdf(template, values).save(docFilename(template));
+    onFile?.({ kind: template.kind, title: template.title, filename: docFilename(template), template, values });
+  }
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 200,
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      padding: "40px 16px", overflowY: "auto",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "100%", maxWidth: 640, background: C.surface, borderRadius: R.xl,
+        boxShadow: SHADOW.modal, border: `1px solid ${C.border}`, overflow: "hidden",
+      }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, padding: "20px 22px", borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div style={{ width: 36, height: 36, borderRadius: R.md, background: C.accentSoft, color: C.accent, display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <FileText size={18} />
+            </div>
+            <div>
+              <div style={{ fontFamily: FONTS.display, fontSize: 16, fontWeight: 600, color: C.text, lineHeight: 1.3 }}>{template.title}</div>
+              <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Editable draft · fill it in, then download, print, or file</div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", cursor: "pointer", color: C.textMuted, padding: 4 }}><X size={18} /></button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 22px", background: C.infoBg, color: C.info, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>
+          <ShieldOff size={14} /> De-identified — no student names or medical PII are included in this document.
+        </div>
+
+        <div style={{ padding: "18px 22px", maxHeight: "50vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14 }}>
+          {template.fields.map(f => (
+            <div key={f.key}>
+              <label style={{ display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.04em", color: C.textMuted, marginBottom: 5, textTransform: "uppercase" }}>{f.label}</label>
+              {f.multiline
+                ? <textarea value={values[f.key]} onChange={e => set(f.key, e.target.value)} rows={3} style={{ ...fieldStyle, resize: "vertical", lineHeight: 1.5 }} />
+                : <input value={values[f.key]} onChange={e => set(f.key, e.target.value)} style={fieldStyle} />}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "16px 22px", borderTop: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={download} style={secondaryButton}><Download size={15} /> Download PDF</button>
+            <button onClick={print} style={secondaryButton}><Printer size={15} /> Print</button>
+          </div>
+          <button onClick={submit} style={primaryButton}><Send size={15} /> Submit &amp; file</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FiledDocsList({ docs }) {
+  if (!docs || docs.length === 0) return null;
+  return (
+    <>
+      <SectionLabel>Filed documents</SectionLabel>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 36 }}>
+        {docs.map(doc => (
+          <div key={doc.id} style={{
+            background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.lg,
+            boxShadow: SHADOW.card, padding: "14px 18px",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+              <div style={{ width: 34, height: 34, borderRadius: R.md, background: C.lowBg, color: C.low, display: "grid", placeItems: "center", flexShrink: 0 }}>
+                <FileText size={16} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{doc.title}</div>
+                <div style={{ fontSize: 12, color: C.textMuted }}>
+                  {doc.id} · filed {timeAgo(doc.t)} · routed to {doc.routedTo.join(" + ")}
+                </div>
+              </div>
+            </div>
+            <button onClick={() => generateDocPdf(doc.template, doc.values).save(doc.filename)} style={{
+              ...secondaryButton, fontSize: 12, padding: "7px 12px", flexShrink: 0,
+            }}>
+              <Download size={14} /> Download again
+            </button>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ActionItemCard({ action, onFile }) {
+  const [open, setOpen] = useState(false);
   const Icon = ACTION_ICONS[action.kind] || AlertCircle;
   const tone = actionTone(action.kind);
   return (
+    <>
     <div style={{
       background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.lg,
       padding: 18, boxShadow: SHADOW.card,
@@ -2552,7 +2861,7 @@ function ActionItemCard({ action }) {
           {action.body}
         </div>
         {action.cta && (
-          <button style={{
+          <button onClick={() => setOpen(true)} style={{
             background: "transparent", color: tone.fg,
             border: "none", padding: 0,
             fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: FONTS.body,
@@ -2565,6 +2874,14 @@ function ActionItemCard({ action }) {
         )}
       </div>
     </div>
+    {open && (
+      <DocumentGenerator
+        template={buildDocTemplate(action)}
+        onClose={() => setOpen(false)}
+        onFile={(meta) => { onFile?.(meta); setOpen(false); }}
+      />
+    )}
+    </>
   );
 }
 
@@ -2637,7 +2954,11 @@ function TypeDonut({ data }) {
               {data.map(d => <Cell key={d.type} fill={TYPE_COLORS[d.type] || C.textSecondary} />)}
             </Pie>
             <Tooltip
-              contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 12, boxShadow: SHADOW.menu, padding: "6px 10px" }}
+              allowEscapeViewBox={{ x: true, y: true }}
+              position={{ x: -20, y: -54 }}
+              wrapperStyle={{ zIndex: 30, pointerEvents: "none" }}
+              contentStyle={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 12, boxShadow: SHADOW.menu, padding: "6px 10px", color: C.text }}
+              itemStyle={{ color: C.text }}
               labelStyle={{ display: "none" }}
               formatter={(value, _name, props) => [`${value} reports`, props.payload.label]}
             />
@@ -2901,6 +3222,10 @@ function GeoHeatMap({ incidents }) {
 
   const maxCount = Math.max(...byBuilding.map(b => b.count), 1);
 
+  // Color by incident VOLUME (not severity) — green would read as "safe,"
+  // which is wrong for a count map. 1–2 incidents → orange, 3+ → red.
+  const countColor = (n) => (n >= 3 ? C.critical : C.high);
+
   // Massachusetts outline — projected from real geographic coordinates.
   // Equirectangular projection (longitude scaled by cos(lat) so the shape
   // keeps its true proportions). viewBox is 1000 × 630.
@@ -2973,7 +3298,7 @@ function GeoHeatMap({ incidents }) {
           const [cx, cy] = project(b.lon, b.lat);
           const intensity = b.count / maxCount;
           const radius = 30 + intensity * 50;
-          const color = SEVERITY[b.maxSev].color;
+          const color = countColor(b.count);
           return (
             <g key={b.building + "-halo"}>
               <circle cx={cx} cy={cy} r={radius * 1.4}
@@ -2990,7 +3315,7 @@ function GeoHeatMap({ incidents }) {
         {byBuilding.map(b => {
           const [cx, cy] = project(b.lon, b.lat);
           const isHover = hovered && hovered.building === b.building;
-          const color = SEVERITY[b.maxSev].color;
+          const color = countColor(b.count);
           const markerSize = 7 + (b.count / maxCount) * 8;
           return (
             <g key={b.building}
@@ -3032,18 +3357,18 @@ function GeoHeatMap({ incidents }) {
             {hovered.building}
           </div>
           <div style={{ fontSize: 12, color: C.textSecondary, display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: R.full, background: SEVERITY[hovered.maxSev].color }} />
-            {hovered.count} {hovered.count === 1 ? "incident" : "incidents"} · max {SEVERITY[hovered.maxSev].label}
+            <span style={{ width: 8, height: 8, borderRadius: R.full, background: countColor(hovered.count) }} />
+            {hovered.count} {hovered.count === 1 ? "incident" : "incidents"} · {hovered.count >= 3 ? "high volume" : "monitor"}
           </div>
         </div>
       )}
 
-      {/* Legend */}
+      {/* Legend — by incident volume */}
       <div style={{ display: "flex", gap: 14, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
-        {["critical", "high", "medium", "low"].map(s => (
-          <div key={s} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.textSecondary }}>
-            <span style={{ width: 8, height: 8, borderRadius: R.full, background: SEVERITY[s].color }} />
-            {SEVERITY[s].label}
+        {[{ label: "1–2 incidents", color: C.high }, { label: "3+ incidents", color: C.critical }].map(t => (
+          <div key={t.label} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: C.textSecondary }}>
+            <span style={{ width: 8, height: 8, borderRadius: R.full, background: t.color }} />
+            {t.label}
           </div>
         ))}
       </div>
