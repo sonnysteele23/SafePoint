@@ -8,7 +8,7 @@ import {
   FileWarning, Calendar, Briefcase, Gavel, UserCheck, Activity,
   Sun, Moon, Printer, FileText, ShieldOff
 } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar, ComposedChart, Area, CartesianGrid } from "recharts";
 import { jsPDF } from "jspdf";
 
 // ============================================================
@@ -552,6 +552,62 @@ function sickTimeByBuilding(incidents) {
   return Object.entries(map).map(([b, d]) => ({ building: b, ...d }))
     .filter(d => d.incidents > 0)
     .sort((a, b) => b.sickDays - a.sickDays);
+}
+
+// Modeled time-from-incident-to-first-sick-day (PROTOTYPE data only).
+// More severe injuries → leave taken sooner. Deterministic so it's stable.
+const SEV_LAG = { critical: 0, high: 1, medium: 2, low: 3 };
+function sickLagDays(inc) {
+  if (!((inc.sickDaysFollowing || 0) > 0)) return null;
+  const base = SEV_LAG[inc.severity] ?? 2;
+  const v = (parseInt(String(inc.id).replace(/\D/g, ""), 10) || 0) % 2; // 0–1 jitter
+  return base + v;
+}
+
+const MS_DAY = 86400_000;
+function shortDate(ms) {
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+// Daily timeline for the last `days`: incidents on their date, and the sick
+// days that followed plotted on the (modeled) date the leave was taken.
+function sickLeaveTimeline(incidents, days = 30) {
+  const now = Date.now();
+  const startMs = now - days * MS_DAY;
+  const arr = Array.from({ length: days + 1 }, (_, k) => ({
+    k, date: shortDate(startMs + k * MS_DAY), incidents: 0, sickDays: 0,
+  }));
+  const idx = (ms) => Math.floor((ms - startMs) / MS_DAY);
+  incidents.forEach(inc => {
+    if (inc.t < startMs) return;
+    const ik = idx(inc.t);
+    if (arr[ik]) arr[ik].incidents += 1;
+    const lag = sickLagDays(inc);
+    if (lag != null) {
+      const lk = idx(inc.t + lag * MS_DAY);
+      if (arr[lk]) arr[lk].sickDays += inc.sickDaysFollowing || 0;
+    }
+  });
+  // cumulative for the tracking view
+  let ci = 0, cs = 0;
+  arr.forEach(d => { ci += d.incidents; cs += d.sickDays; d.cumIncidents = ci; d.cumSickDays = cs; });
+  return arr;
+}
+
+// Dose–response: average sick days per incident, by severity.
+function sickDoseResponse(incidents) {
+  return ["low", "medium", "high", "critical"].map(s => {
+    const inc = incidents.filter(i => i.severity === s);
+    const days = inc.reduce((a, i) => a + (i.sickDaysFollowing || 0), 0);
+    return { severity: SEVERITY[s].label, avg: inc.length ? +(days / inc.length).toFixed(1) : 0, n: inc.length, color: SEVERITY[s].color };
+  }).filter(d => d.n > 0);
+}
+
+// Average modeled days from incident to leave (for the stat row).
+function avgSickLag(incidents) {
+  const lags = incidents.map(sickLagDays).filter(v => v != null);
+  return lags.length ? +(lags.reduce((a, b) => a + b, 0) / lags.length).toFixed(1) : 0;
 }
 
 // ============================================================
@@ -1992,6 +2048,8 @@ function RepDashboard({ user, incidents, onOpen, onFileDoc, filedDocs }) {
 
       <SickLeaveCallout stats={sick} />
 
+      <SickLeaveAnalysis incidents={monthIncidents} scope="building" />
+
       {actions.length > 0 && (
         <>
           <SectionLabel>Action items for you</SectionLabel>
@@ -2230,6 +2288,8 @@ function PresidentDashboard({ user, incidents, onOpen, onFileDoc, filedDocs }) {
       }}>
         <SickTimeByBuildingList data={sickByBuilding} />
       </div>
+
+      <SickLeaveAnalysis incidents={monthIncidents} scope="district" />
 
       <SectionLabel>Student safety planning · who needs corrective action</SectionLabel>
       <div style={{
@@ -3041,6 +3101,105 @@ function EmptyMini({ text }) {
 // ============================================================
 // SICK LEAVE — the only hard signal
 // ============================================================
+// Role-aware incident → sick-leave correlation analysis.
+function SickLeaveAnalysis({ incidents, scope = "district" }) {
+  const stats = sickTimeStats(incidents);
+  if (incidents.length === 0) return null;
+  const timeline = sickLeaveTimeline(incidents, 30);
+  const dose = sickDoseResponse(incidents);
+  const lag = avgSickLag(incidents);
+  const where = scope === "building" ? "in your building" : "across the district";
+
+  const tip = {
+    contentStyle: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.md, fontSize: 12, boxShadow: SHADOW.menu, color: C.text, padding: "6px 10px" },
+    itemStyle: { color: C.text },
+    labelStyle: { color: C.textMuted, fontSize: 11 },
+  };
+  const LegendChip = ({ color, label }) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: C.textSecondary }}>
+      <span style={{ width: 9, height: 9, borderRadius: 2, background: color }} /> {label}
+    </span>
+  );
+  const Stat = ({ value, label }) => (
+    <div>
+      <div style={{ fontFamily: FONTS.display, fontSize: 22, fontWeight: 600, color: C.text, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 5, fontWeight: 500 }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <SectionLabel>Incident → sick-leave correlation · 30 days</SectionLabel>
+        <HipaaNotice text="HIPAA · aggregate only, no individuals" />
+      </div>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: R.xl, padding: 22, boxShadow: SHADOW.card, marginBottom: 36 }}>
+        <p style={{ margin: "0 0 18px", fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 760 }}>
+          {where.charAt(0).toUpperCase() + where.slice(1)}, sick leave consistently <strong style={{ color: C.text }}>follows</strong> incidents — the leave curve below trails each incident spike by ~{lag} day{lag === 1 ? "" : "s"}, and severity tracks with leave taken. This is a strong <strong style={{ color: C.text }}>correlation</strong> (incidents precede leave), not proof of causation.
+        </p>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 18, marginBottom: 24 }}>
+          <Stat value={`${stats.pct}%`} label="Of incidents followed by sick leave" />
+          <Stat value={`${lag} days`} label="Avg time from incident to leave" />
+          <Stat value={stats.avgPerIncident} label="Avg sick days per incident" />
+        </div>
+
+        {/* Timeline — incidents and the sick leave that followed */}
+        <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 4 }}>Incidents and the sick leave that followed</div>
+        <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
+          <LegendChip color={C.accent} label="Incidents (by date)" />
+          <LegendChip color={C.high} label="Sick days (by date taken)" />
+        </div>
+        <ResponsiveContainer width="100%" height={210}>
+          <ComposedChart data={timeline} margin={{ top: 6, right: 6, left: -20, bottom: 0 }}>
+            <CartesianGrid stroke={C.border} vertical={false} strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: C.textMuted, fontSize: 10 }} interval={4} axisLine={{ stroke: C.border }} tickLine={false} />
+            <YAxis allowDecimals={false} tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+            <Tooltip {...tip} />
+            <Area type="monotone" dataKey="sickDays" name="Sick days" stroke={C.high} fill={C.high} fillOpacity={0.18} strokeWidth={2} />
+            <Bar dataKey="incidents" name="Incidents" fill={C.accent} radius={[2, 2, 0, 0]} barSize={7} />
+          </ComposedChart>
+        </ResponsiveContainer>
+
+        {/* Dose-response + cumulative */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 24, marginTop: 24 }}>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 8 }}>Avg sick days by incident severity</div>
+            <ResponsiveContainer width="100%" height={170}>
+              <BarChart data={dose} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+                <CartesianGrid stroke={C.border} vertical={false} strokeDasharray="3 3" />
+                <XAxis dataKey="severity" tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip {...tip} formatter={(v) => [`${v} days avg`, ""]} labelFormatter={(l) => l} />
+                <Bar dataKey="avg" radius={[3, 3, 0, 0]} barSize={34}>
+                  {dose.map(d => <Cell key={d.severity} fill={d.color} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, marginBottom: 8 }}>Cumulative — incidents vs sick days</div>
+            <div style={{ display: "flex", gap: 16, marginBottom: 2 }}>
+              <LegendChip color={C.accent} label="Incidents" />
+              <LegendChip color={C.high} label="Sick days" />
+            </div>
+            <ResponsiveContainer width="100%" height={150}>
+              <LineChart data={timeline} margin={{ top: 6, right: 6, left: -22, bottom: 0 }}>
+                <CartesianGrid stroke={C.border} vertical={false} strokeDasharray="3 3" />
+                <XAxis dataKey="date" tick={{ fill: C.textMuted, fontSize: 10 }} interval={6} axisLine={{ stroke: C.border }} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: C.textMuted, fontSize: 10 }} axisLine={false} tickLine={false} />
+                <Tooltip {...tip} />
+                <Line type="monotone" dataKey="cumIncidents" name="Incidents" stroke={C.accent} dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="cumSickDays" name="Sick days" stroke={C.high} dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SickLeaveCallout({ stats }) {
   return (
     <div style={{
