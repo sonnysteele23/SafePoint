@@ -1257,18 +1257,30 @@ function ThemeToggle({ mode, onToggle }) {
   );
 }
 
+// Shield crest mark — blue badge with a white star and an open book.
 function Logo({ size = 22 }) {
+  const gid = `safepointShield${size}`;
   return (
-    <div style={{
-      width: size, height: size, borderRadius: R.sm,
-      background: C.accent, display: "grid", placeItems: "center",
-      boxShadow: "0 1px 2px rgba(181,60,42,0.2)",
-    }}>
-      <div style={{
-        width: size * 0.42, height: size * 0.42, borderRadius: 2,
-        background: "rgba(255,255,255,0.95)",
-      }} />
-    </div>
+    <svg width={size} height={size * 52 / 48} viewBox="0 0 48 52" fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ display: "block", filter: "drop-shadow(0 1px 2px rgba(37,55,160,0.35))" }}
+      aria-hidden="true">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#4C66EC" />
+          <stop offset="1" stopColor="#2A3FB4" />
+        </linearGradient>
+      </defs>
+      {/* Shield */}
+      <path d="M10 7 Q6 7 6 11 L6 26 Q6 38 24 50 Q42 38 42 26 L42 11 Q42 7 38 7 Z"
+        fill={`url(#${gid})`} />
+      {/* Star */}
+      <path d="M24 12 L25.88 17.41 L31.61 17.53 L27.04 20.99 L28.70 26.47 L24 23.2 L19.30 26.47 L20.96 20.99 L16.39 17.53 L22.12 17.41 Z"
+        fill="#FFFFFF" />
+      {/* Open book */}
+      <rect x="16.5" y="30" width="6.3" height="7" rx="1.2" fill="#DCE4FF" />
+      <rect x="25.2" y="30" width="6.3" height="7" rx="1.2" fill="#DCE4FF" />
+    </svg>
   );
 }
 
