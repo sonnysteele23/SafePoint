@@ -18,6 +18,10 @@ Thumbs.db
 .env.local
 .env.*.local
 
+# Local binary docs (proposals, decks) — keep out of the repo
+*.key
+*.pptx
+
 # We DO commit:
 # - The built preview at the repo root (index.html, assets/, favicon.svg) — that's what GitHub Pages serves
 # - The dev/ source tree (dev/src, dev/package.json, dev/vite.config.js, dev/index.html)
